@@ -10,7 +10,7 @@ from app.models.schemas import (
     PackingCategory, TravelerInput,
 )
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.5-flash-lite"
 
 _client = None
 
@@ -222,7 +222,7 @@ async def run_agent(trip: TripInput) -> PackingResponse:
                 )
             ))
 
-        contents.append(types.Content(role="function", parts=function_responses))
+        contents.append(types.Content(role="user", parts=function_responses))
 
     return PackingResponse(
         destination=trip.destination,
