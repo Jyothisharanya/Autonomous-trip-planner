@@ -11,7 +11,6 @@ AI-powered packing list generator that uses real weather data and LLM tool-calli
 
 - Python 3.11+
 - Node.js 18+
-- A Google Gemini API key ([get one here](https://aistudio.google.com/apikey))
 - A Firebase project with Firestore enabled ([setup guide](https://firebase.google.com/docs/firestore/quickstart))
 
 ## Setup
