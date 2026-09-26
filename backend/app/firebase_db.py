@@ -7,6 +7,19 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 _db = None
+_firebase_available = None
+
+
+def is_firebase_available() -> bool:
+    global _firebase_available
+    if _firebase_available is not None:
+        return _firebase_available
+    try:
+        _init_firebase()
+        _firebase_available = True
+    except Exception:
+        _firebase_available = False
+    return _firebase_available
 
 
 def _init_firebase():
@@ -35,7 +48,9 @@ def _init_firebase():
     return _db
 
 
-async def save_trip(trip_data: dict) -> str:
+async def save_trip(trip_data: dict) -> Optional[str]:
+    if not is_firebase_available():
+        return None
     db = _init_firebase()
     doc_ref = db.collection("trips").document()
     trip_data["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -44,6 +59,8 @@ async def save_trip(trip_data: dict) -> str:
 
 
 async def get_trip(trip_id: str) -> Optional[dict]:
+    if not is_firebase_available():
+        return None
     db = _init_firebase()
     doc = db.collection("trips").document(trip_id).get()
     if doc.exists:
@@ -54,6 +71,8 @@ async def get_trip(trip_id: str) -> Optional[dict]:
 
 
 async def list_trips(limit: int = 20) -> list[dict]:
+    if not is_firebase_available():
+        return []
     db = _init_firebase()
     docs = (
         db.collection("trips")

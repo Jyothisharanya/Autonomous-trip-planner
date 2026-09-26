@@ -9,13 +9,15 @@ load_dotenv()
 
 from app.models.schemas import TripInput, PackingResponse, TripRecord
 from app.agent import run_agent
-from app.firebase_db import save_trip, get_trip, list_trips
+from app.firebase_db import save_trip, get_trip, list_trips, is_firebase_available
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not os.environ.get("GEMINI_API_KEY"):
         print("WARNING: GEMINI_API_KEY is not set. The agent will fail on requests.")
+    if not is_firebase_available():
+        print("WARNING: Firebase is not configured. Trips will not be persisted.")
     yield
 
 
@@ -32,7 +34,11 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "gemini_configured": bool(os.environ.get("GEMINI_API_KEY")),
+        "firebase_configured": is_firebase_available(),
+    }
 
 
 @app.post("/api/pack", response_model=PackingResponse)
