@@ -89,7 +89,7 @@ def _build_user_prompt(req: TransportSearchRequest) -> str:
 - Date: {req.date}
 - Date Window: ±{req.date_window_n} days
 - Travelers: {req.travelers_adults} adults, {req.travelers_children} children
-- Transport Budget Share: ${req.budget_share:.2f} USD
+- Transport Budget Share: ₹{req.budget_share:.2f} INR
 - Ranking preference: {pref_desc}
 - Baggage: {req.packing_bag_count or 'unknown'} bags, {req.packing_weight_kg or 'unknown'} kg
 {f'- Return date: {req.return_date}' if req.return_date else ''}

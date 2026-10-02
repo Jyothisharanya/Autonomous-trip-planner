@@ -68,9 +68,9 @@ function OptionCard({ option, onSelect, isSelected }) {
 
         <div className="transport-card-right">
           <div className="transport-price">
-            ${option.price_total.toFixed(2)}
+            ₹{option.price_total.toFixed(2)}
             {option.baggage_fee_est > 0 && (
-              <span className="baggage-fee">+${option.baggage_fee_est.toFixed(2)} bag</span>
+              <span className="baggage-fee">+₹{option.baggage_fee_est.toFixed(2)} bag</span>
             )}
           </div>
 
@@ -84,7 +84,7 @@ function OptionCard({ option, onSelect, isSelected }) {
 
           {option.budget_status === 'over' && (
             <span className="over-budget-badge">
-              over budget by ${option.budget_over_by.toFixed(2)}
+              over budget by ₹{option.budget_over_by.toFixed(2)}
             </span>
           )}
         </div>
@@ -177,7 +177,7 @@ export default function TransportResults({ result, onSelect, selectedId }) {
       )}
 
       <div className="budget-summary">
-        <span>Budget: ${result.budget_share.toFixed(2)}</span>
+        <span>Budget: ₹{result.budget_share.toFixed(2)}</span>
         <span>{withinBudget.length} within budget</span>
         {overBudget.length > 0 && <span className="over-count">{overBudget.length} over budget</span>}
       </div>

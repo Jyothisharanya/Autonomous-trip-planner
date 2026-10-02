@@ -1,5 +1,6 @@
 import httpx
 import hashlib
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -8,10 +9,34 @@ from app.models.transport import (
     WeatherRisk, WeatherRiskLevel, DataSource, BudgetStatus,
 )
 
-SKYSCANNER_BASE = "https://partners.api.skyscanner.net/apiservices/v3"
-AMADEUS_BASE = "https://api.amadeus.com/v2"
-TRAINLINE_BASE = "https://www.trainline.eu/api/v5"
-FlixBus_API = "https://api.flixbus.com/search/v1"
+# Indian airport IATA codes mapping
+INDIAN_AIRPORTS = {
+    "delhi": "DEL", "new delhi": "DEL", "mumbai": "BOM", "bangalore": "BLR",
+    "bengaluru": "BLR", "chennai": "MAA", "kolkata": "CCU", "hyderabad": "HYD",
+    "pune": "PNQ", "ahmedabad": "AMD", "jaipur": "JAI", "lucknow": "LKO",
+    "kochi": "COK", "cochin": "COK", "goa": "GOI", "guwahati": "GAU",
+    "thiruvananthapuram": "TRV", "trivandrum": "TRV", "bhubaneswar": "BBI",
+    "nagpur": "NAG", "indore": "IDR", "coimbatore": "CJB", "visakhapatnam": "VTZ",
+    "patna": "PAT", "vadodara": "BDQ", "surat": "STV", "chandigarh": "IXC",
+    "amritsar": "ATQ", "varanasi": "VNS", "srinagar": "SXR", "ranchi": "IXR",
+    "raipur": "RPR", "madurai": "IXM", "jodhpur": "JDH", "udaipur": "UDR",
+    "dehradun": "DED", "agra": "AGR", "mangalore": "IXE", "tiruchirappalli": "TRZ",
+    "mysore": "MYQ", "hubli": "HBX", "agra": "AGR",
+}
+
+# Major Indian railway stations
+INDIAN_RAILWAY_STATIONS = {
+    "delhi": "NDLS", "new delhi": "NDLS", "mumbai": "CSTM", "chennai": "MAS",
+    "kolkata": "HWH", "howrah": "HWH", "bangalore": "SBC", "bengaluru": "SBC",
+    "hyderabad": "SC", "secunderabad": "SC", "pune": "PUNE", "ahmedabad": "ADI",
+    "jaipur": "JP", "lucknow": "LKO", "kochi": "ERS", "ernakulam": "ERS",
+    "goa": "MAO", "madgaon": "MAO", "guwahati": "GHY", "thiruvananthapuram": "TVC",
+    "trivandrum": "TVC", "bhubaneswar": "BBS", "nagpur": "NGP", "indore": "INDB",
+    "coimbatore": "CBE", "visakhapatnam": "VSKP", "patna": "PNBE",
+    "vadodara": "BRC", "surat": "ST", "chandigarh": "CDG", "amritsar": "ASR",
+    "varanasi": "BSB", "srinagar": "SINA", "ranchi": "RNC", "raipur": "R",
+    "jodhpur": "JU", "udaipur": "UDZ", "dehradun": "DDN", "mysore": "MYS",
+}
 
 RISKY_WEATHER_CODES = {95, 96, 99, 71, 73, 75, 77, 85, 86}
 
@@ -40,71 +65,138 @@ def _weather_risk_for_departure(weather: Optional[dict], departure_dt: datetime)
     return WeatherRisk(level=WeatherRiskLevel.NONE)
 
 
-def _estimate_duration(mode: TransportMode, distance_km: float) -> int:
-    speeds = {
-        TransportMode.FLIGHT: 800,
-        TransportMode.TRAIN: 160,
-        TransportMode.BUS: 80,
-        TransportMode.CAR: 100,
-    }
-    speed = speeds.get(mode, 100)
-    return max(60, int((distance_km / speed) * 60) + 90)
+def _resolve_iata(city: str) -> Optional[str]:
+    """Resolve city name to IATA airport code."""
+    return INDIAN_AIRPORTS.get(city.lower().strip())
 
 
-def _estimate_price(mode: TransportMode, distance_km: float, pax: int) -> float:
-    base_rates = {
-        TransportMode.FLIGHT: 0.12,
-        TransportMode.TRAIN: 0.05,
-        TransportMode.BUS: 0.025,
-        TransportMode.CAR: 0.03,
-    }
-    rate = base_rates.get(mode, 0.05)
-    base = distance_km * rate
-    if mode == TransportMode.FLIGHT:
-        base = max(80, base)
-    elif mode == TransportMode.TRAIN:
-        base = max(20, base)
-    elif mode == TransportMode.BUS:
-        base = max(10, base)
-    return round(base * pax, 2)
+def _resolve_railway_station(city: str) -> Optional[str]:
+    """Resolve city name to railway station code."""
+    return INDIAN_RAILWAY_STATIONS.get(city.lower().strip())
+
+
+async def _get_amadeus_token() -> Optional[str]:
+    """Get Amadeus API access token."""
+    client_id = os.environ.get("AMADEUS_CLIENT_ID", "")
+    client_secret = os.environ.get("AMADEUS_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return None
+
+    base = os.environ.get("AMADEUS_BASE_URL", "https://api.amadeus.com")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{base}/v1/security/oauth2/token", data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            })
+            resp.raise_for_status()
+            return resp.json().get("access_token")
+    except Exception:
+        return None
 
 
 async def search_flights(origin: str, destination: str, date: str, adults: int = 1,
                           children: int = 0, weather: Optional[dict] = None) -> list[TransportOption]:
-    api_key = None  # Would come from env
+    """Search flights using Amadeus API (real data) with fallback to estimates."""
+    origin_code = _resolve_iata(origin)
+    dest_code = _resolve_iata(destination)
     options = []
 
-    if api_key:
+    # Try Amadeus API first
+    token = await _get_amadeus_token()
+    if token and origin_code and dest_code:
         try:
+            base = os.environ.get("AMADEUS_BASE_URL", "https://api.amadeus.com")
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(f"{AMADEUS_BASE}/shopping/flight-offers", params={
-                    "originLocationCode": origin[:3].upper(),
-                    "destinationLocationCode": destination[:3].upper(),
+                resp = await client.get(f"{base}/v2/shopping/flight-offers", params={
+                    "originLocationCode": origin_code,
+                    "destinationLocationCode": dest_code,
                     "departureDate": date,
                     "adults": adults,
                     "children": children,
-                    "max": 5,
-                }, headers={"Authorization": f"Bearer {api_key}"})
+                    "max": 6,
+                    "currencyCode": "INR",
+                }, headers={"Authorization": f"Bearer {token}"})
                 resp.raise_for_status()
                 data = resp.json()
+
                 for offer in data.get("data", []):
-                    # Parse Amadeus response into TransportOption
-                    pass
+                    try:
+                        segments = offer["itineraries"][0]["segments"]
+                        legs = []
+                        total_duration = 0
+                        for seg in segments:
+                            dep = seg["departure"]
+                            arr = seg["arrival"]
+                            legs.append(Leg(
+                                **{"from": dep["iataCode"], "to": arr["iataCode"]},
+                                departure=dep["at"],
+                                arrival=arr["at"],
+                                vehicle_number=seg.get("carrierCode", "") + seg.get("number", ""),
+                                carrier=seg.get("carrierCode", ""),
+                            ))
+                            # Parse duration
+                            dur_str = seg.get("duration", "PT0M")
+                            mins = 0
+                            if "H" in dur_str:
+                                h = int(dur_str.split("H")[0].replace("PT", ""))
+                                mins += h * 60
+                            if "M" in dur_str:
+                                m_part = dur_str.split("H")[-1] if "H" in dur_str else dur_str.replace("PT", "")
+                                m = int(m_part.replace("M", ""))
+                                mins += m
+                            total_duration += mins
+
+                        price_info = offer.get("price", {})
+                        total_price = float(price_info.get("total", 0))
+                        currency = price_info.get("currency", "INR")
+
+                        carrier_codes = set()
+                        for seg in segments:
+                            carrier_codes.add(seg.get("carrierCode", ""))
+
+                        wr = _weather_risk_for_departure(weather, datetime.fromisoformat(segments[0]["departure"]["at"]))
+
+                        options.append(TransportOption(
+                            id=_make_id(origin, destination, date, "flight", str(offer.get("id", ""))),
+                            mode=TransportMode.FLIGHT,
+                            provider=", ".join(carrier_codes),
+                            legs=legs,
+                            duration_total_minutes=total_duration or 120,
+                            transfers=len(segments) - 1,
+                            price_base=total_price,
+                            currency=currency,
+                            baggage_allowance=BaggageAllowance(included_bags=1, included_weight_kg=15, extra_bag_fee_est=4150),
+                            baggage_fee_est=0,
+                            price_total=total_price,
+                            budget_status=BudgetStatus.WITHIN,
+                            weather_risk=wr,
+                            source=DataSource.API,
+                            fetched_at=datetime.utcnow().isoformat(),
+                            deep_link=f"https://www.google.com/flights?q=flights+from+{origin}+to+{destination}+on+{date}",
+                            labels=[],
+                        ))
+                    except Exception:
+                        continue
+
+                if options:
+                    return options
         except Exception:
             pass
 
-    # Generate realistic estimated options
+    # Fallback: estimated options with Indian airline names
     import random
-    carriers = ["SkyWings Airlines", "GlobalAir", "BudgetJet", "National Express Air", "Horizon Airlines"]
-    departure_hours = [6, 8, 10, 13, 15, 18, 21]
+    carriers = ["IndiGo", "Air India", "SpiceJet", "Vistara", "AirAsia India", "GoFirst"]
+    departure_hours = [5, 7, 9, 11, 14, 17, 20, 22]
 
     for i in range(min(5, len(carriers))):
         dep_hour = departure_hours[i % len(departure_hours)]
         dep = datetime.strptime(f"{date} {dep_hour:02d}:00", "%Y-%m-%d %H:%M")
-        duration = random.randint(90, 300)
+        duration = random.randint(90, 180)
         arr = dep + timedelta(minutes=duration)
         pax = adults + children
-        price = _estimate_price(TransportMode.FLIGHT, 800, pax) * random.uniform(0.8, 1.5)
+        price = random.randint(3500, 12000) * pax
 
         wr = _weather_risk_for_departure(weather, dep)
 
@@ -122,15 +214,15 @@ async def search_flights(origin: str, destination: str, date: str, adults: int =
             duration_total_minutes=duration,
             transfers=0,
             price_base=round(price, 2),
-            currency="USD",
-            baggage_allowance=BaggageAllowance(included_bags=1, included_weight_kg=23, extra_bag_fee_est=50),
+            currency="INR",
+            baggage_allowance=BaggageAllowance(included_bags=1, included_weight_kg=15, extra_bag_fee_est=4150),
             baggage_fee_est=0,
             price_total=round(price, 2),
             budget_status=BudgetStatus.WITHIN,
             weather_risk=wr,
             source=DataSource.ESTIMATE,
             fetched_at=datetime.utcnow().isoformat(),
-            deep_link=f"https://www.google.com/flights?q=flights+from+{origin}+to+{destination}+on+{date}",
+            deep_link=f"https://www.makemytrip.com/flight/search?origin={origin}&destination={destination}&date={date}",
             labels=[],
         ))
 
@@ -139,44 +231,123 @@ async def search_flights(origin: str, destination: str, date: str, adults: int =
 
 async def search_trains(origin: str, destination: str, date: str, adults: int = 1,
                          children: int = 0, weather: Optional[dict] = None) -> list[TransportOption]:
-    import random
+    """Search trains using Indian Railway API with fallback to curated data."""
+    origin_code = _resolve_railway_station(origin)
+    dest_code = _resolve_railway_station(destination)
     options = []
-    operators = ["National Rail", "Express Rail", "Regional Connect", "Intercity", "HighSpeed Rail"]
-    departure_hours = [5, 7, 9, 12, 14, 17, 20]
 
-    for i in range(min(4, len(operators))):
+    # Try Indian Railway API (via RapidAPI or similar)
+    rapid_key = os.environ.get("RAPIDAPI_KEY", "")
+    if rapid_key and origin_code and dest_code:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    "https://irctc1.p.rapidapi.com/api/v3/trainBetweenStations",
+                    params={"fromStationCode": origin_code, "toStationCode": dest_code, "dateOfJourney": date},
+                    headers={
+                        "X-RapidAPI-Key": rapid_key,
+                        "X-RapidAPI-Host": "irctc1.p.rapidapi.com",
+                    }
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for train in data.get("data", [])[:6]:
+                    try:
+                        dep_time = train.get("departure", "00:00")
+                        arr_time = train.get("arrival", "00:00")
+                        dep = datetime.strptime(f"{date} {dep_time}", "%Y-%m-%d %H:%M")
+                        arr = datetime.strptime(f"{date} {arr_time}", "%Y-%m-%d %H:%M")
+                        if arr < dep:
+                            arr += timedelta(days=1)
+
+                        duration_mins = int((arr - dep).total_seconds() / 60)
+                        fare = float(train.get("general_fare", 0) or 0) * adults
+                        if fare <= 0:
+                            fare = random.randint(500, 3000) * adults
+
+                        wr = _weather_risk_for_departure(weather, dep)
+
+                        options.append(TransportOption(
+                            id=_make_id(origin, destination, date, "train", train.get("train_number", "")),
+                            mode=TransportMode.TRAIN,
+                            provider=train.get("train_name", "Indian Railways"),
+                            legs=[Leg(
+                                **{"from": origin, "to": destination},
+                                departure=dep.isoformat(),
+                                arrival=arr.isoformat(),
+                                vehicle_number=train.get("train_number", ""),
+                                carrier=train.get("train_name", "Indian Railways"),
+                            )],
+                            duration_total_minutes=duration_mins,
+                            transfers=0,
+                            price_base=fare,
+                            currency="INR",
+                            baggage_allowance=None,
+                            baggage_fee_est=0,
+                            price_total=fare,
+                            budget_status=BudgetStatus.WITHIN,
+                            weather_risk=wr,
+                            source=DataSource.API,
+                            fetched_at=datetime.utcnow().isoformat(),
+                            deep_link=f"https://www.irctc.co.in/nget/train-search?from={origin_code}&to={dest_code}&date={date}",
+                            labels=[],
+                        ))
+                    except Exception:
+                        continue
+
+                if options:
+                    return options
+        except Exception:
+            pass
+
+    # Fallback: curated Indian trains with realistic fares
+    import random
+    trains = [
+        {"name": "Rajdhani Express", "number": "12951", "type": "premium"},
+        {"name": "Shatabdi Express", "number": "12002", "type": "premium"},
+        {"name": "Duronto Express", "number": "12213", "type": "express"},
+        {"name": "Garib Rath", "number": "12215", "type": "budget"},
+        {"name": "Superfast Express", "number": "12625", "type": "express"},
+        {"name": "Jan Shatabdi", "number": "12058", "type": "budget"},
+    ]
+    departure_hours = [5, 6, 8, 10, 14, 16, 18, 21, 23]
+
+    fare_ranges = {"premium": (1500, 5000), "express": (800, 2500), "budget": (400, 1200)}
+
+    for i, train in enumerate(trains[:5]):
         dep_hour = departure_hours[i % len(departure_hours)]
-        dep = datetime.strptime(f"{date} {dep_hour:02d}:30", "%Y-%m-%d %H:%M")
-        duration = random.randint(120, 480)
+        dep = datetime.strptime(f"{date} {dep_hour:02d}:{random.randint(0,59):02d}", "%Y-%m-%d %H:%M")
+        duration = random.randint(180, 900)
         arr = dep + timedelta(minutes=duration)
         pax = adults + children
-        price = _estimate_price(TransportMode.TRAIN, 500, pax) * random.uniform(0.7, 1.3)
+        low, high = fare_ranges.get(train["type"], (500, 2000))
+        fare = random.randint(low, high) * pax
 
         wr = _weather_risk_for_departure(weather, dep)
 
         options.append(TransportOption(
-            id=_make_id(origin, destination, date, "train", operators[i]),
+            id=_make_id(origin, destination, date, "train", train["number"]),
             mode=TransportMode.TRAIN,
-            provider=operators[i],
+            provider=train["name"],
             legs=[Leg(
                 **{"from": origin, "to": destination},
                 departure=dep.isoformat(),
                 arrival=arr.isoformat(),
-                vehicle_number=f"TR{random.randint(1000,9999)}",
-                carrier=operators[i],
+                vehicle_number=train["number"],
+                carrier=train["name"],
             )],
             duration_total_minutes=duration,
             transfers=0,
-            price_base=round(price, 2),
-            currency="USD",
+            price_base=round(fare, 2),
+            currency="INR",
             baggage_allowance=None,
             baggage_fee_est=0,
-            price_total=round(price, 2),
+            price_total=round(fare, 2),
             budget_status=BudgetStatus.WITHIN,
             weather_risk=wr,
             source=DataSource.ESTIMATE,
             fetched_at=datetime.utcnow().isoformat(),
-            deep_link=f"https://www.google.com/travel/trains?q={origin}+to+{destination}",
+            deep_link=f"https://www.irctc.co.in/nget/train-search",
             labels=[],
         ))
 
@@ -185,44 +356,113 @@ async def search_trains(origin: str, destination: str, date: str, adults: int = 
 
 async def search_buses(origin: str, destination: str, date: str, adults: int = 1,
                         children: int = 0, weather: Optional[dict] = None) -> list[TransportOption]:
-    import random
+    """Search buses using RedBus/AbhiBus API with fallback to curated data."""
     options = []
-    operators = ["FlixBus", "Greyhound", "Megabus", "National Express", "RedBus"]
-    departure_hours = [5, 8, 11, 14, 18, 22]
 
-    for i in range(min(4, len(operators))):
+    # Try RedBus API if available
+    redbus_key = os.environ.get("REDBUS_API_KEY", "")
+    if redbus_key:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    "https://api.redbus.in/v2/search",
+                    params={"src": origin, "dest": destination, "doj": date},
+                    headers={"Authorization": f"Bearer {redbus_key}"}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for bus in data.get("buses", [])[:5]:
+                    try:
+                        fare = float(bus.get("fare", 0)) * adults
+                        dep = datetime.strptime(f"{date} {bus.get('departure', '20:00')}", "%Y-%m-%d %H:%M")
+                        arr = datetime.strptime(f"{date} {bus.get('arrival', '06:00')}", "%Y-%m-%d %H:%M")
+                        if arr < dep:
+                            arr += timedelta(days=1)
+                        dur = int((arr - dep).total_seconds() / 60)
+
+                        options.append(TransportOption(
+                            id=_make_id(origin, destination, date, "bus", bus.get("operator", "")),
+                            mode=TransportMode.BUS,
+                            provider=bus.get("operator", "Bus Operator"),
+                            legs=[Leg(
+                                **{"from": origin, "to": destination},
+                                departure=dep.isoformat(),
+                                arrival=arr.isoformat(),
+                                vehicle_number=bus.get("bus_number", ""),
+                                carrier=bus.get("operator", ""),
+                            )],
+                            duration_total_minutes=dur,
+                            transfers=0,
+                            price_base=fare,
+                            currency="INR",
+                            baggage_allowance=BaggageAllowance(included_bags=1, included_weight_kg=15),
+                            baggage_fee_est=0,
+                            price_total=fare,
+                            budget_status=BudgetStatus.WITHIN,
+                            weather_risk=_weather_risk_for_departure(weather, dep),
+                            source=DataSource.API,
+                            fetched_at=datetime.utcnow().isoformat(),
+                            deep_link=f"https://www.redbus.in/bus-tickets/{origin.lower()}-to-{destination.lower()}",
+                            labels=[],
+                        ))
+                    except Exception:
+                        continue
+
+                if options:
+                    return options
+        except Exception:
+            pass
+
+    # Fallback: curated Indian bus operators
+    import random
+    operators = [
+        {"name": "KSRTC", "type": "govt"},
+        {"name": "APSRTC", "type": "govt"},
+        {"name": "TSRTC", "type": "govt"},
+        {"name": "SRS Travels", "type": "private"},
+        {"name": "VRL Travels", "type": "private"},
+        {"name": "Orange Travels", "type": "private"},
+        {"name": "KPN Travels", "type": "private"},
+        {"name": "Neeta Travels", "type": "private"},
+    ]
+    departure_hours = [5, 7, 9, 11, 14, 17, 19, 21, 23]
+
+    fare_ranges = {"govt": (300, 1200), "private": (500, 2500)}
+
+    for i, op in enumerate(operators[:5]):
         dep_hour = departure_hours[i % len(departure_hours)]
-        dep = datetime.strptime(f"{date} {dep_hour:02d}:00", "%Y-%m-%d %H:%M")
+        dep = datetime.strptime(f"{date} {dep_hour:02d}:{random.randint(0,59):02d}", "%Y-%m-%d %H:%M")
         duration = random.randint(180, 720)
         arr = dep + timedelta(minutes=duration)
         pax = adults + children
-        price = _estimate_price(TransportMode.BUS, 400, pax) * random.uniform(0.6, 1.2)
+        low, high = fare_ranges.get(op["type"], (400, 1500))
+        fare = random.randint(low, high) * pax
 
         wr = _weather_risk_for_departure(weather, dep)
 
         options.append(TransportOption(
-            id=_make_id(origin, destination, date, "bus", operators[i]),
+            id=_make_id(origin, destination, date, "bus", op["name"]),
             mode=TransportMode.BUS,
-            provider=operators[i],
+            provider=op["name"],
             legs=[Leg(
                 **{"from": origin, "to": destination},
                 departure=dep.isoformat(),
                 arrival=arr.isoformat(),
-                vehicle_number=f"B{random.randint(100,999)}",
-                carrier=operators[i],
+                vehicle_number=f"{''.join(w[0] for w in op['name'].split())}{random.randint(100,999)}",
+                carrier=op["name"],
             )],
             duration_total_minutes=duration,
             transfers=0,
-            price_base=round(price, 2),
-            currency="USD",
+            price_base=round(fare, 2),
+            currency="INR",
             baggage_allowance=BaggageAllowance(included_bags=1, included_weight_kg=15),
             baggage_fee_est=0,
-            price_total=round(price, 2),
+            price_total=round(fare, 2),
             budget_status=BudgetStatus.WITHIN,
             weather_risk=wr,
             source=DataSource.ESTIMATE,
             fetched_at=datetime.utcnow().isoformat(),
-            deep_link=f"https://www.google.com/travel/buses?q={origin}+to+{destination}",
+            deep_link=f"https://www.redbus.in/bus-tickets/{origin.lower()}-to-{destination.lower()}",
             labels=[],
         ))
 

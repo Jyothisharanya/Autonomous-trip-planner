@@ -68,7 +68,7 @@ class TransportOption(BaseModel):
     duration_total_minutes: int
     transfers: int = 0
     price_base: float
-    currency: str = "USD"
+    currency: str = "INR"
     baggage_allowance: Optional[BaggageAllowance] = None
     baggage_fee_est: float = 0.0
     price_total: float
@@ -88,7 +88,7 @@ class TransportSearchRequest(BaseModel):
     date_window_n: int = Field(0, ge=0, le=3, description="±N days flexibility")
     travelers_adults: int = Field(1, ge=1)
     travelers_children: int = Field(0, ge=0)
-    budget_share: float = Field(..., gt=0, description="Transport budget in USD")
+    budget_share: float = Field(..., gt=0, description="Transport budget in INR")
     ranking_preference: RankingPreference = RankingPreference.CHEAPEST
     custom_preference: Optional[str] = Field(None, description="Free-text preference")
     return_date: Optional[str] = Field(None, description="YYYY-MM-DD for return trip")

@@ -15,7 +15,7 @@ export default function TransportSearch({ onSearch, loading, packingResult }) {
   const [dateWindowN, setDateWindowN] = useState(0);
   const [adults, setAdults] = useState(1);
   const [children, setChildren] = useState(0);
-  const [budgetShare, setBudgetShare] = useState(500);
+  const [budgetShare, setBudgetShare] = useState(15000);
   const [rankingPreference, setRankingPreference] = useState('cheapest');
   const [customPreference, setCustomPreference] = useState('');
   const [returnDate, setReturnDate] = useState('');
@@ -131,7 +131,7 @@ export default function TransportSearch({ onSearch, loading, packingResult }) {
 
       <div className="form-row">
         <div className="form-group">
-          <label htmlFor="budget">Transport Budget (USD)</label>
+          <label htmlFor="budget">Transport Budget (₹)</label>
           <input
             id="budget"
             type="number"
