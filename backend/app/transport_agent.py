@@ -139,8 +139,85 @@ def _apply_agent_ranking(options: list[TransportOption], agent_analysis: dict,
     return options
 
 
+async def _run_without_llm(req: TransportSearchRequest) -> TransportSearchResponse:
+    """Fallback: search and rank without LLM when API key is missing."""
+    weather_data = None
+
+    # Try to get weather
+    try:
+        geo = await geocode(req.origin)
+        if "error" not in geo:
+            geo_dest = await geocode(req.destination)
+            if "error" not in geo_dest:
+                from datetime import datetime as dt
+                target = dt.strptime(req.date, "%Y-%m-%d").date()
+                today = dt.utcnow().date()
+                if (target - today).days <= 16:
+                    weather_data = await get_weather_forecast(
+                        geo_dest["latitude"], geo_dest["longitude"], req.date
+                    )
+                    if "error" in weather_data:
+                        weather_data = None
+    except Exception:
+        pass
+
+    # Search all modes
+    all_options = await search_all_modes(
+        req.origin, req.destination, req.date,
+        req.travelers_adults, req.travelers_children,
+        weather=weather_data,
+    )
+
+    analysis = {
+        "interpreted_preferences": f"Ranked by {req.ranking_preference.value}" +
+            (f" with custom preference: {req.custom_preference}" if req.custom_preference else ""),
+        "warnings": ["Running without AI agent (GEMINI_API_KEY not set). Results are estimated."],
+        "recommended_ranking": [],
+    }
+
+    ranked = _apply_agent_ranking(all_options, analysis, req.ranking_preference, req.budget_share)
+
+    # Date window fallback
+    if req.date_window_n > 0 and ranked and all(o.budget_status == BudgetStatus.OVER for o in ranked):
+        window_options = []
+        for delta in range(-req.date_window_n, req.date_window_n + 1):
+            if delta == 0:
+                continue
+            alt_date = (datetime.strptime(req.date, "%Y-%m-%d") + timedelta(days=delta)).strftime("%Y-%m-%d")
+            alt = await search_all_modes(
+                req.origin, req.destination, alt_date,
+                req.travelers_adults, req.travelers_children,
+                weather=weather_data,
+            )
+            for o in alt:
+                o.labels.append(f"date: {alt_date}")
+            window_options.extend(alt)
+
+        if window_options:
+            ranked.extend(window_options)
+            analysis["warnings"].append(
+                f"Original date options were over budget. Showing ±{req.date_window_n} day alternatives."
+            )
+
+    return TransportSearchResponse(
+        origin=req.origin,
+        destination=req.destination,
+        date=req.date,
+        options=ranked,
+        total_found=len(ranked),
+        ranking_preference=req.ranking_preference.value,
+        interpreted_preferences=analysis.get("interpreted_preferences"),
+        budget_share=req.budget_share,
+        warnings=analysis.get("warnings", []),
+    )
+
+
 async def run_transport_agent(req: TransportSearchRequest) -> TransportSearchResponse:
     """Run the transport agent loop with tool calling."""
+    # If no Gemini API key, use direct search fallback
+    if not os.environ.get("GEMINI_API_KEY"):
+        return await _run_without_llm(req)
+
     user_prompt = _build_user_prompt(req)
 
     tools = types.Tool(function_declarations=[
