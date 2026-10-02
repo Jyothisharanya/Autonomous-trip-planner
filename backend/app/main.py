@@ -10,6 +10,7 @@ load_dotenv()
 from app.models.schemas import TripInput, PackingResponse, TripRecord
 from app.agent import run_agent
 from app.firebase_db import save_trip, get_trip, list_trips, is_firebase_available
+from app.routes.transport import router as transport_router
 
 
 @asynccontextmanager
@@ -21,7 +22,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Autonomous Trip Planner — Packing Module", lifespan=lifespan)
+app = FastAPI(title="Autonomous Trip Planner", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,6 +31,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(transport_router)
 
 
 @app.get("/api/health")
