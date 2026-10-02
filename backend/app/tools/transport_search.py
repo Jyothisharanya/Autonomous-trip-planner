@@ -256,10 +256,10 @@ async def search_trains(origin: str, destination: str, date: str, adults: int = 
                 # Each train is separated by ^, fields separated by ~
                 records = raw.split("^")
                 
-                for record in records[:8]:
+                for record in records[1:]:  # Skip first empty record
                     try:
                         fields = record.split("~")
-                        if len(fields) < 30:
+                        if len(fields) < 40:
                             continue
                         
                         train_number = fields[0].strip()
@@ -300,37 +300,43 @@ async def search_trains(origin: str, destination: str, date: str, adults: int = 
                         
                         duration_mins = int((arr - dep).total_seconds() / 60)
                         if duration_mins <= 0:
-                            duration_mins = int(duration_str) if duration_str.isdigit() else 600
+                            # Parse duration from HH.MM format
+                            dur_parts = duration_str.split(".")
+                            if len(dur_parts) == 2:
+                                duration_mins = int(dur_parts[0]) * 60 + int(dur_parts[1])
+                            else:
+                                duration_mins = 600
                         
                         # Parse train type
-                        train_type = fields[22].strip() if len(fields) > 22 else ""
+                        train_type = fields[32].strip() if len(fields) > 32 else ""
                         days_of_run = fields[13].strip() if len(fields) > 13 else ""
                         
-                        # Parse fares from the data
-                        # Fare data is in fields[28] format: CLASS:fare1,fare2,...
+                        # Parse fares from field41
+                        # Format: TRAIN_TYPE:BASE_FARE:CLASS1_FARES:CLASS2_FARES:...
                         pax = adults + children
-                        fare_data = fields[28].strip() if len(fields) > 28 else ""
+                        fare_data = fields[41].strip() if len(fields) > 41 else ""
                         
-                        # Try to extract 3AC fare as default
+                        # Extract fare based on train type and class
                         fare = 0
                         if fare_data:
-                            for class_fare in fare_data.split("|"):
-                                parts = class_fare.split(":")
-                                if len(parts) >= 2:
-                                    class_name = parts[0]
-                                    fares = parts[1].split(",")
-                                    # Look for 3A (3AC) fare
-                                    if class_name == "3A" and len(fares) > 0:
-                                        try:
-                                            fare = float(fares[0]) * pax
-                                        except:
-                                            pass
-                                    # Look for SL (Sleeper) fare as cheaper option
-                                    elif class_name == "SL" and fare == 0:
-                                        try:
-                                            fare = float(fares[0]) * pax
-                                        except:
-                                            pass
+                            parts = fare_data.split(":")
+                            if len(parts) > 2:
+                                # First part is train type, second is base fare
+                                try:
+                                    base_fare = float(parts[1])
+                                    # Use 3AC fare (index 2) if available, else SL (index 4)
+                                    for i, class_fares in enumerate(parts[2:], 2):
+                                        if class_fares.strip():
+                                            fares = class_fares.split(",")
+                                            # Try to get 3AC fare (usually 3rd non-empty class)
+                                            if len(fares) >= 3 and fares[2].strip():
+                                                fare = float(fares[2]) * pax
+                                                break
+                                            elif len(fares) >= 1 and fares[0].strip():
+                                                fare = float(fares[0]) * pax
+                                                break
+                                except:
+                                    pass
                         
                         if fare <= 0:
                             # Estimate based on train type
