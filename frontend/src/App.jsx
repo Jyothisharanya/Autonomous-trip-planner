@@ -3,6 +3,8 @@ import TripForm from './components/TripForm';
 import PackingResult from './components/PackingResult';
 import TransportSearch from './components/TransportSearch';
 import TransportResults from './components/TransportResults';
+import AccommodationSearch from './components/AccommodationSearch';
+import AccommodationResults from './components/AccommodationResults';
 import './App.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
@@ -12,6 +14,7 @@ function App() {
   const [packingResult, setPackingResult] = useState(null);
   const [transportResult, setTransportResult] = useState(null);
   const [selectedTransportId, setSelectedTransportId] = useState(null);
+  const [accommodationResult, setAccommodationResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -70,14 +73,39 @@ function App() {
 
   const handleSelectTransport = async (optionId) => {
     setSelectedTransportId(optionId);
-    // In a full implementation, this would call POST /api/transport/select
+  };
+
+  const handleAccommodationSearch = async (searchData) => {
+    setLoading(true);
+    setError(null);
+    setAccommodationResult(null);
+
+    try {
+      const resp = await fetch(`${API_BASE}/api/accommodation/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(searchData),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(err.detail || 'Request failed');
+      }
+
+      const data = await resp.json();
+      setAccommodationResult(data);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="app">
       <header className="app-header">
         <h1>Autonomous Trip Planner</h1>
-        <p>AI-powered travel planning — packing, transport, and more</p>
+        <p>AI-powered travel planning — packing, transport, and stays</p>
       </header>
 
       <nav className="tab-nav">
@@ -85,13 +113,19 @@ function App() {
           className={`tab-btn ${tab === 'packing' ? 'tab-active' : ''}`}
           onClick={() => setTab('packing')}
         >
-          🧳 Packing List
+          🧳 Packing
         </button>
         <button
           className={`tab-btn ${tab === 'transport' ? 'tab-active' : ''}`}
           onClick={() => setTab('transport')}
         >
           ✈️ Transport
+        </button>
+        <button
+          className={`tab-btn ${tab === 'accommodation' ? 'tab-active' : ''}`}
+          onClick={() => setTab('accommodation')}
+        >
+          🏨 Stay
         </button>
       </nav>
 
@@ -146,6 +180,33 @@ function App() {
                 onSelect={handleSelectTransport}
                 selectedId={selectedTransportId}
               />
+            )}
+          </>
+        )}
+
+        {tab === 'accommodation' && (
+          <>
+            <AccommodationSearch
+              onSearch={handleAccommodationSearch}
+              loading={loading}
+            />
+
+            {loading && (
+              <div className="loading">
+                <div className="spinner" />
+                <p>Searching accommodation...</p>
+                <p className="loading-sub">Finding the best stays within your budget</p>
+              </div>
+            )}
+
+            {error && (
+              <div className="error-box">
+                <strong>Error:</strong> {error}
+              </div>
+            )}
+
+            {accommodationResult && (
+              <AccommodationResults result={accommodationResult} />
             )}
           </>
         )}

@@ -11,6 +11,7 @@ from app.models.schemas import TripInput, PackingResponse, TripRecord
 from app.agent import run_agent
 from app.firebase_db import save_trip, get_trip, list_trips, is_firebase_available
 from app.routes.transport import router as transport_router
+from app.routes.accommodation import router as accommodation_router
 
 
 @asynccontextmanager
@@ -33,6 +34,7 @@ app.add_middleware(
 )
 
 app.include_router(transport_router)
+app.include_router(accommodation_router)
 
 
 @app.get("/api/health")
