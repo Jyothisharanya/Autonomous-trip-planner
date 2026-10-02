@@ -59,6 +59,11 @@ function OptionCard({ option, onSelect, isSelected }) {
               </>
             )}
           </div>
+          {option.legs?.[0]?.vehicle_number && (
+            <div className="transport-vehicle-number">
+              {option.mode === 'flight' ? '✈️' : option.mode === 'train' ? '🚂' : '🚌'} {option.legs[0].vehicle_number}
+            </div>
+          )}
           <div className="transport-meta">
             <span>{formatDuration(option.duration_total_minutes)}</span>
             {option.transfers > 0 && <span>· {option.transfers} transfer{option.transfers > 1 ? 's' : ''}</span>}

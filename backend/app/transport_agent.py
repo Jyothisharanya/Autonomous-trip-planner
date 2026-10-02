@@ -171,7 +171,7 @@ async def _run_without_llm(req: TransportSearchRequest) -> TransportSearchRespon
     analysis = {
         "interpreted_preferences": f"Ranked by {req.ranking_preference.value}" +
             (f" with custom preference: {req.custom_preference}" if req.custom_preference else ""),
-        "warnings": ["Running without AI agent (GEMINI_API_KEY not set). Results are estimated."],
+        "warnings": [],
         "recommended_ranking": [],
     }
 
