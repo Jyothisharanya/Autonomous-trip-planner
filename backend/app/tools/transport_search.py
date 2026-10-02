@@ -26,7 +26,7 @@ INDIAN_AIRPORTS = {
 
 # Major Indian railway stations
 INDIAN_RAILWAY_STATIONS = {
-    "delhi": "NDLS", "new delhi": "NDLS", "mumbai": "CSTM", "chennai": "MAS",
+    "delhi": "NDLS", "new delhi": "NDLS", "mumbai": "MMCT", "chennai": "MAS",
     "kolkata": "HWH", "howrah": "HWH", "bangalore": "SBC", "bengaluru": "SBC",
     "hyderabad": "SC", "secunderabad": "SC", "pune": "PUNE", "ahmedabad": "ADI",
     "jaipur": "JP", "lucknow": "LKO", "kochi": "ERS", "ernakulam": "ERS",
@@ -232,9 +232,33 @@ async def search_flights(origin: str, destination: str, date: str, adults: int =
 async def search_trains(origin: str, destination: str, date: str, adults: int = 1,
                          children: int = 0, weather: Optional[dict] = None) -> list[TransportOption]:
     """Search trains using erail.in API (free, no key required) with real Indian Railway data."""
+    import random
     origin_code = _resolve_railway_station(origin)
     dest_code = _resolve_railway_station(destination)
     options = []
+
+    # Mumbai area station codes
+    MUMBAI_CODES = {'BCT', 'BDTS', 'CSMT', 'CSTM', 'MMCT', 'BSR', 'PNVL', 'LTT', 'DDR', 'DR'}
+    DELHI_CODES = {'NDLS', 'NZM', 'DEE', 'DLI', 'DSA', 'ANVT', 'DEC', 'NDLS'}
+    CHENNAI_CODES = {'MAS', 'MS', 'TBM', 'CGL', 'MMCC'}
+    KOLKATA_CODES = {'HWH', 'SDAH', 'KOAA', 'CHTC'}
+    BANGALORE_CODES = {'SBC', 'BNC', 'YPR', 'BNCE', 'KJM'}
+    HYDERABAD_CODES = {'SC', 'HYB', 'KCG', 'LPI'}
+
+    CITY_CODES = {
+        'mumbai': MUMBAI_CODES, 'delhi': DELHI_CODES, 'chennai': CHENNAI_CODES,
+        'kolkata': KOLKATA_CODES, 'bangalore': BANGALORE_CODES, 'bengaluru': BANGALORE_CODES,
+        'hyderabad': HYDERABAD_CODES,
+    }
+
+    def _get_dest_codes(city: str, code: str) -> set:
+        city_lower = city.lower()
+        for key, codes in CITY_CODES.items():
+            if key in city_lower:
+                return codes
+        return {code} if code else set()
+
+    dest_codes = _get_dest_codes(destination, dest_code)
 
     # Try erail.in API (free, no authentication required)
     if origin_code and dest_code:
@@ -251,120 +275,120 @@ async def search_trains(origin: str, destination: str, date: str, adults: int = 
                 )
                 resp.raise_for_status()
                 raw = resp.text
-                
-                # Parse erail.in response format
+
+                # Parse erail.in response
                 # Each train is separated by ^, fields separated by ~
                 records = raw.split("^")
-                
-                for record in records[1:]:  # Skip first empty record
+
+                for record in records[1:]:  # Skip metadata record
                     try:
                         fields = record.split("~")
-                        if len(fields) < 40:
+                        if len(fields) < 42:
                             continue
-                        
+
                         train_number = fields[0].strip()
                         train_name = fields[1].strip()
-                        source_station = fields[2].strip()
-                        source_code = fields[3].strip()
-                        dest_station = fields[4].strip()
-                        dest_code_field = fields[5].strip()
-                        
+                        src_name = fields[2].strip()
+                        src_code = fields[3].strip()
+                        dst_name = fields[4].strip()
+                        dst_code_field = fields[5].strip()
+
                         # Boarding and alighting points
                         board_station = fields[6].strip()
                         board_code = fields[7].strip()
                         alight_station = fields[8].strip()
                         alight_code = fields[9].strip()
-                        
-                        # Departure and arrival times
+
+                        # Filter: only include trains where alighting is at destination city
+                        if alight_code not in dest_codes:
+                            continue
+
+                        # Departure and arrival times (format: HH.MM)
                         dep_time_str = fields[10].strip()
                         arr_time_str = fields[11].strip()
                         duration_str = fields[12].strip()
-                        
+
                         if not dep_time_str or not arr_time_str:
                             continue
-                        
-                        # Parse departure time (format: HH.MM)
-                        dep_parts = dep_time_str.replace(".", ":").split(":")
+
+                        # Parse times - HH.MM format where . is separator
+                        dep_parts = dep_time_str.split(".")
                         dep_hour = int(dep_parts[0])
                         dep_min = int(dep_parts[1]) if len(dep_parts) > 1 else 0
-                        
-                        # Parse arrival time
-                        arr_parts = arr_time_str.replace(".", ":").split(":")
+
+                        arr_parts = arr_time_str.split(".")
                         arr_hour = int(arr_parts[0])
                         arr_min = int(arr_parts[1]) if len(arr_parts) > 1 else 0
-                        
+
                         dep = datetime.strptime(f"{date} {dep_hour:02d}:{dep_min:02d}", "%Y-%m-%d %H:%M")
                         arr = datetime.strptime(f"{date} {arr_hour:02d}:{arr_min:02d}", "%Y-%m-%d %H:%M")
-                        if arr < dep:
+                        if arr <= dep:
                             arr += timedelta(days=1)
-                        
-                        duration_mins = int((arr - dep).total_seconds() / 60)
-                        if duration_mins <= 0:
-                            # Parse duration from HH.MM format
-                            dur_parts = duration_str.split(".")
-                            if len(dur_parts) == 2:
-                                duration_mins = int(dur_parts[0]) * 60 + int(dur_parts[1])
-                            else:
-                                duration_mins = 600
-                        
-                        # Parse train type
+
+                        # Duration is in HH.MM format (17.40 = 17h 40m)
+                        dur_parts = duration_str.split(".")
+                        if len(dur_parts) == 2:
+                            duration_mins = int(dur_parts[0]) * 60 + int(dur_parts[1])
+                        else:
+                            duration_mins = int((arr - dep).total_seconds() / 60)
+
+                        # Train type and days
                         train_type = fields[32].strip() if len(fields) > 32 else ""
                         days_of_run = fields[13].strip() if len(fields) > 13 else ""
-                        
+                        distance = fields[33].strip() if len(fields) > 33 else ""
+
                         # Parse fares from field41
-                        # Format: TRAIN_TYPE:BASE_FARE:CLASS1_FARES:CLASS2_FARES:...
+                        # Format: TRAIN_TYPE:BASE_FARE:EMPTY:CLASS_FARES:...
+                        # Class fares columns: 1AC,2AC,3AC,SL,2S,CC
                         pax = adults + children
                         fare_data = fields[41].strip() if len(fields) > 41 else ""
-                        
-                        # Extract fare based on train type and class
+
                         fare = 0
                         if fare_data:
                             parts = fare_data.split(":")
-                            if len(parts) > 2:
-                                # First part is train type, second is base fare
-                                try:
-                                    base_fare = float(parts[1])
-                                    # Use 3AC fare (index 2) if available, else SL (index 4)
-                                    for i, class_fares in enumerate(parts[2:], 2):
-                                        if class_fares.strip():
-                                            fares = class_fares.split(",")
-                                            # Try to get 3AC fare (usually 3rd non-empty class)
-                                            if len(fares) >= 3 and fares[2].strip():
-                                                fare = float(fares[2]) * pax
+                            # Try to find fare in different class columns
+                            for part_idx in range(3, min(len(parts), 10)):
+                                class_fares = parts[part_idx].split(",")
+                                if len(class_fares) >= 3:
+                                    # Try 3AC (index 2), then SL (index 3), then 2AC (index 1), then 1AC (index 0)
+                                    for fare_idx in [2, 3, 1, 0]:
+                                        if fare_idx < len(class_fares) and class_fares[fare_idx].strip():
+                                            try:
+                                                fare = float(class_fares[fare_idx]) * pax
                                                 break
-                                            elif len(fares) >= 1 and fares[0].strip():
-                                                fare = float(fares[0]) * pax
-                                                break
-                                except:
-                                    pass
-                        
+                                            except ValueError:
+                                                continue
+                                if fare > 0:
+                                    break
+
                         if fare <= 0:
-                            # Estimate based on train type
+                            # Estimate based on train type and distance
+                            dist_km = int(distance) if distance.isdigit() else 500
                             if "RAJDHANI" in train_type.upper():
-                                fare = random.randint(2000, 4000) * pax
+                                fare = max(1500, dist_km * 2) * pax
                             elif "SHATABDI" in train_type.upper():
-                                fare = random.randint(1500, 3000) * pax
+                                fare = max(1000, dist_km * 1.5) * pax
                             elif "DURONTO" in train_type.upper():
-                                fare = random.randint(1800, 3500) * pax
+                                fare = max(1200, dist_km * 1.8) * pax
+                            elif "GARIB" in train_type.upper():
+                                fare = max(400, dist_km * 0.6) * pax
                             elif "SUPERFAST" in train_type.upper():
-                                fare = random.randint(800, 2000) * pax
+                                fare = max(500, dist_km * 0.8) * pax
                             else:
-                                fare = random.randint(500, 1500) * pax
-                        
+                                fare = max(300, dist_km * 0.5) * pax
+                            fare = round(fare, -1)  # Round to nearest 10
+
                         wr = _weather_risk_for_departure(weather, dep)
-                        
-                        # Build vehicle number (train number)
-                        vehicle = train_number
-                        
+
                         options.append(TransportOption(
                             id=_make_id(origin, destination, date, "train", train_number),
                             mode=TransportMode.TRAIN,
                             provider=train_name,
                             legs=[Leg(
-                                **{"from": origin, "to": destination},
+                                **{"from": f"{board_station} ({board_code})", "to": f"{alight_station} ({alight_code})"},
                                 departure=dep.isoformat(),
                                 arrival=arr.isoformat(),
-                                vehicle_number=vehicle,
+                                vehicle_number=train_number,
                                 carrier=train_name,
                             )],
                             duration_total_minutes=duration_mins,
@@ -390,7 +414,6 @@ async def search_trains(origin: str, destination: str, date: str, adults: int = 
             pass
 
     # Fallback: curated Indian trains with realistic fares
-    import random
     trains = [
         {"name": "Rajdhani Express", "number": "12951", "type": "premium"},
         {"name": "Shatabdi Express", "number": "12002", "type": "premium"},
